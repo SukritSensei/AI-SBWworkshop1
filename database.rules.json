@@ -1,0 +1,14 @@
+{
+  "rules": {
+    "logs": {
+      ".read": true,
+      ".write": true
+    },
+    "access_logs": {
+      ".read": true,
+      ".write": true
+    },
+    ".read": false,
+    ".write": false
+  }
+}

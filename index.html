@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔐 AI Gesture Password System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;600;700&display=swap');
+        
+        * {
+            font-family: 'Prompt', sans-serif;
+        }
+        
+        .gesture-pulse {
+            animation: pulse-gesture 0.5s ease-in-out;
+        }
+        
+        @keyframes pulse-gesture {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        
+        .status-locked {
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.6);
+            background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
+        }
+        
+        .status-unlocked {
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.6);
+            background: linear-gradient(135deg, #22C55E 0%, #16A34A 100%);
+        }
+        
+        .camera-frame {
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            aspect-ratio: 16 / 9;
+        }
+        
+        .gesture-indicator {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            margin: 0 6px;
+            animation: indicator-pulse 1s ease-in-out infinite;
+        }
+        
+        .gesture-indicator.active {
+            background-color: #22C55E;
+        }
+        
+        .gesture-indicator.inactive {
+            background-color: #D1D5DB;
+        }
+        
+        @keyframes indicator-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .fade-enter-active, .fade-leave-active {
+            transition: opacity 0.3s;
+        }
+        
+        .fade-enter-from, .fade-leave-to {
+            opacity: 0;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 min-h-screen text-white">
+    <div id="app">
+        <!-- Header -->
+        <div class="fixed top-0 left-0 right-0 z-50 glass-effect border-b border-slate-700">
+            <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="text-3xl">🔐</div>
+                    <div>
+                        <h1 class="text-2xl font-bold">AI Gesture Password</h1>
+                        <p class="text-sm text-slate-400">Rock-Paper-Scissors Security</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="text-right">
+                        <p class="text-xs text-slate-400">สถานะ: {{ isUnlocked ? 'ปลดล็อก ✓' : 'ล็อก 🔒' }}</p>
+                        <p class="text-sm font-semibold" :class="isUnlocked ? 'text-green-400' : 'text-red-400'">
+                            {{ isUnlocked ? 'UNLOCKED' : 'LOCKED' }}
+                        </p>
+                    </div>
+                    <button v-if="!isLoggedIn" @click="showLoginModal = true" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition font-semibold">
+                        🔑 Login Firebase
+                    </button>
+                    <div v-else class="text-right">
+                        <p class="text-xs text-green-400">✓ Logged in</p>
+                        <button @click="logoutFirebase" class="text-xs text-slate-400 hover:text-slate-200">Logout</button>
+                    </div>
+                    <button @click="resetSystem" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition">
+                        รีเซ็ต
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="pt-24 pb-12 px-6">
+            <div class="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Camera & Controls Section -->
+                <div class="lg:col-span-2 space-y-6">
+                    <!-- Camera Preview -->
+                    <div class="bg-gradient-to-br from-slate-800 to-slate-700 rounded-2xl p-6 shadow-xl">
+                        <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                            <span>📹</span> Camera Preview
+                        </h2>
+                        <div class="camera-frame bg-black relative">
+                            <video 
+                                ref="videoElement" 
+                                autoplay 
+                                playsinline
+                                class="w-full h-full object-cover"
+                            ></video>
+                            
+                            <!-- Gesture Display Overlay -->
+                            <div class="absolute inset-0 flex items-end justify-center pb-6">
+                                <div v-if="currentGesture" class="gesture-pulse bg-black/70 px-6 py-3 rounded-full">
+                                    <div class="text-center">
+                                        <p class="text-sm text-slate-300">ท่าทางที่ตรวจจับ</p>
+                                        <p class="text-2xl font-bold">{{ gestureEmoji[currentGesture] }} {{ currentGesture }}</p>
+                                        <p class="text-xs text-slate-400">Confidence: {{ (confidence * 100).toFixed(1) }}%</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Performance Stats -->
+                        <div class="mt-4 grid grid-cols-3 gap-3">
+                            <div class="bg-slate-700/50 rounded-lg p-3 text-center">
+                                <p class="text-xs text-slate-400">FPS</p>
+                                <p class="text-lg font-bold">{{ fps }}</p>
+                            </div>
+                            <div class="bg-slate-700/50 rounded-lg p-3 text-center">
+                                <p class="text-xs text-slate-400">Inference</p>
+                                <p class="text-lg font-bold">{{ inferenceTime }}ms</p>
+                            </div>
+                            <div class="bg-slate-700/50 rounded-lg p-3 text-center">
+                                <p class="text-xs text-slate-400">Status</p>
+                                <p class="text-lg font-bold" :class="isModelReady ? 'text-green-400' : 'text-yellow-400'">
+                                    {{ isModelReady ? '✓' : '⏳' }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Gesture History -->
+                    <div class="bg-gradient-to-br from-slate-800 to-slate-700 rounded-2xl p-6 shadow-xl">
+                        <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                            <span>📊</span> Gesture Sequence
+                        </h2>
+                        <div class="flex items-center gap-3 mb-4">
+                            <div v-for="(gesture, index) in currentSequence" :key="index" class="flex items-center gap-2">
+                                <div class="w-12 h-12 rounded-lg bg-slate-700 flex items-center justify-center text-xl">
+                                    {{ gestureEmoji[gesture] }}
+                                </div>
+                                <span class="text-sm text-slate-300">#{{ index + 1 }}</span>
+                                <span v-if="index < currentSequence.length - 1" class="text-slate-500">→</span>
+                            </div>
+                            <div v-if="currentSequence.length === 0" class="text-slate-500 text-sm">
+                                ยังไม่มีท่าทาง - เริ่มทำท่าทาง!
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm text-slate-400">ท่าทาง:</span>
+                            <div class="flex gap-2">
+                                <span v-for="i in 5" :key="i" 
+                                    class="gesture-indicator"
+                                    :class="i <= currentSequence.length ? 'active' : 'inactive'">
+                                </span>
+                            </div>
+                            <span class="text-sm font-semibold ml-2">{{ currentSequence.length }}/5</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Sidebar -->
+                <div class="space-y-6">
+                    <!-- Status Indicator -->
+                    <div :class="['rounded-2xl p-8 text-center shadow-xl transition-all duration-500', isUnlocked ? 'status-unlocked' : 'status-locked']">
+                        <div class="text-6xl mb-4">{{ isUnlocked ? '🔓' : '🔒' }}</div>
+                        <h3 class="text-2xl font-bold mb-2">{{ isUnlocked ? 'ปลดล็อกแล้ว!' : 'ล็อกอยู่' }}</h3>
+                        <p class="text-sm opacity-90">{{ isUnlocked ? 'สำเร็จแล้ว ✓' : 'ยังไม่ถูกต้อง' }}</p>
+                    </div>
+
+                    <!-- Setup Password -->
+                    <div class="bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl p-6 shadow-xl">
+                        <h3 class="text-lg font-semibold mb-4">🔑 ตั้งรหัสผ่าน</h3>
+                        <div class="space-y-3">
+                            <label class="block text-sm">
+                                <span class="text-blue-200 text-xs">รหัสผ่าน (ท่าทาง):</span>
+                                <input 
+                                    v-model="setupMode"
+                                    @focus="startSetupMode"
+                                    type="text" 
+                                    placeholder="กดสร้างรหัส"
+                                    class="w-full mt-1 px-3 py-2 bg-blue-500/30 border border-blue-400 rounded-lg text-white placeholder-blue-300/50 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                                    disabled
+                                />
+                            </label>
+                            <div class="flex gap-2 text-sm">
+                                <div v-for="gesture in passwordSequence" :key="gesture" class="text-lg">
+                                    {{ gestureEmoji[gesture] }}
+                                </div>
+                            </div>
+                            <button 
+                                @click="startSetupMode"
+                                :disabled="isSetupMode"
+                                class="w-full py-2 bg-blue-400 hover:bg-blue-500 disabled:bg-blue-300 disabled:opacity-50 rounded-lg font-semibold transition"
+                            >
+                                {{ isSetupMode ? 'สร้างรหัสอยู่...' : 'สร้างรหัสใหม่' }}
+                            </button>
+                            <p class="text-xs text-blue-200">
+                                {{ isSetupMode ? `ทำท่า ${5 - passwordSequence.length} ท่าอีก` : `ปัจจุบัน: ${passwordSequence.length} ท่า` }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Manual Controls -->
+                    <div class="bg-gradient-to-br from-slate-800 to-slate-700 rounded-2xl p-6 shadow-xl">
+                        <h3 class="text-lg font-semibold mb-4">⚙️ ควบคุม</h3>
+                        <div class="space-y-2">
+                            <button 
+                                @click="clearSequence"
+                                class="w-full py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-semibold transition"
+                            >
+                                🔄 ล้างลำดับ
+                            </button>
+                            <button 
+                                @click="startCamera"
+                                v-if="!cameraActive"
+                                class="w-full py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition"
+                            >
+                                ▶️ เปิดกล้อง
+                            </button>
+                            <button 
+                                @click="stopCamera"
+                                v-else
+                                class="w-full py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold transition"
+                            >
+                                ⏹️ ปิดกล้อง
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Statistics -->
+                    <div class="bg-gradient-to-br from-slate-800 to-slate-700 rounded-2xl p-6 shadow-xl">
+                        <h3 class="text-lg font-semibold mb-4">📈 สถิติ</h3>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-slate-400">ทั้งหมด:</span>
+                                <span class="font-semibold">{{ totalAttempts }}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-slate-400">สำเร็จ:</span>
+                                <span class="font-semibold text-green-400">{{ successfulAttempts }}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-slate-400">ล้มเหลว:</span>
+                                <span class="font-semibold text-red-400">{{ failedAttempts }}</span>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500 pt-2 border-t border-slate-600">
+                                <span>Success Rate:</span>
+                                <span>{{ successRate }}%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Access History -->
+        <div class="px-6 pb-12">
+            <div class="max-w-6xl mx-auto">
+                <div class="bg-gradient-to-br from-slate-800 to-slate-700 rounded-2xl p-6 shadow-xl">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <span>📋</span> ประวัติการเข้าใช้งาน
+                    </h2>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead class="text-left text-slate-400 border-b border-slate-600">
+                                <tr>
+                                    <th class="px-4 py-2">เวลา</th>
+                                    <th class="px-4 py-2">สถานะ</th>
+                                    <th class="px-4 py-2">ลำดับท่าทาง</th>
+                                    <th class="px-4 py-2">ผลลัพธ์</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(log, index) in accessLogs.slice(0, 10)" :key="index" class="border-b border-slate-700 hover:bg-slate-700/50 transition">
+                                    <td class="px-4 py-3 text-slate-300">{{ formatTime(log.timestamp) }}</td>
+                                    <td class="px-4 py-3">
+                                        <span :class="log.status === 'success' ? 'text-green-400' : 'text-red-400'">
+                                            {{ log.status === 'success' ? '✓ สำเร็จ' : '✗ ล้มเหลว' }}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <div class="flex gap-1">
+                                            <span v-for="gesture in log.sequence" :key="gesture" class="text-lg">
+                                                {{ gestureEmoji[gesture] }}
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td class="px-4 py-3 text-slate-400">
+                                        {{ log.attemptNumber > 1 ? `ครั้งที่ ${log.attemptNumber}` : 'ครั้งแรก' }}
+                                    </td>
+                                </tr>
+                                <tr v-if="accessLogs.length === 0" class="h-12">
+                                    <td colspan="4" class="text-center text-slate-500">ยังไม่มีประวัติ</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div v-if="!isModelReady" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="text-center">
+                <div class="inline-block">
+                    <div class="relative w-16 h-16 mb-4">
+                        <div class="absolute inset-0 border-4 border-slate-600 rounded-full"></div>
+                        <div class="absolute inset-0 border-4 border-transparent border-t-blue-500 rounded-full animate-spin"></div>
+                    </div>
+                </div>
+                <p class="text-white text-lg font-semibold">⏳ กำลังโหลดโมเดล AI...</p>
+                <p class="text-slate-400 text-sm mt-2">กรุณารอสักครู่</p>
+            </div>
+        </div>
+
+        <!-- Firebase Login Modal -->
+        <div v-if="showLoginModal" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div class="bg-slate-800 rounded-2xl p-8 max-w-sm w-full mx-4 shadow-2xl">
+                <h2 class="text-2xl font-bold mb-6 flex items-center gap-2">
+                    <span>🔐</span> Firebase Login
+                </h2>
+                
+                <div class="space-y-4">
+                    <!-- Anonymous Login -->
+                    <button @click="loginAnonymous" class="w-full py-3 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 rounded-lg font-semibold transition">
+                        👤 Login Anonymously
+                    </button>
+
+                    <!-- Email/Password (Optional) -->
+                    <div class="relative">
+                        <input 
+                            v-model="loginEmail" 
+                            type="email" 
+                            placeholder="Email (optional)" 
+                            class="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                    </div>
+                    <div class="relative">
+                        <input 
+                            v-model="loginPassword" 
+                            type="password" 
+                            placeholder="Password (optional)" 
+                            class="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                    </div>
+                    <button 
+                        v-if="loginEmail && loginPassword"
+                        @click="loginEmail && loginPassword ? loginWithEmail() : null" 
+                        class="w-full py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition"
+                    >
+                        ✉️ Login with Email
+                    </button>
+
+                    <!-- Status -->
+                    <div v-if="loginError" class="text-red-400 text-sm p-3 bg-red-900/30 rounded-lg">
+                        {{ loginError }}
+                    </div>
+                    <div v-if="loginSuccess" class="text-green-400 text-sm p-3 bg-green-900/30 rounded-lg">
+                        {{ loginSuccess }}
+                    </div>
+
+                    <!-- Close Button -->
+                    <button @click="showLoginModal = false" class="w-full py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition">
+                        ❌ Close
+                    </button>
+                </div>
+
+                <p class="text-xs text-slate-400 mt-4 text-center">
+                    Login to Firebase to enable cloud logging
+                </p>
+            </div>
+        </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
